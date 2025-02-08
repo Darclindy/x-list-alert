@@ -61,7 +61,7 @@ export class App {
   async start(): Promise<void> {
     try {
       // 每1分钟检查一次新推文
-      setInterval(() => this.checkNewTweets(), 60 * 1000);
+      setInterval(() => this.checkNewTweets(), 1.5 * 60 * 1000);
       // 立即执行一次
       await this.checkNewTweets();
     } catch (error: unknown) {
