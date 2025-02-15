@@ -2,6 +2,9 @@ import { config } from "./config/config";
 import { Tweet } from "./modules/network/types/twitter";
 import { TwitterListService } from "./modules/network/twitterList";
 import { TelegramSender } from "./modules/webhook/telegramSender";
+import { PublicKey } from "@solana/web3.js";
+import { buy, createSellLimitOrder } from "./modules/jupiter";
+import { getSPLTokenBalance } from "./modules/helpers/check_balance";
 import fs from "fs";
 import path from "path";
 
@@ -90,7 +93,7 @@ export class App {
 
       // 处理并发送每条推文
       for (const tweet of unprocessedTweets) {
-        await this.processTweet(tweet);
+        await this.processTweetAndTrade(tweet);
       }
 
       // 保存处理过的推文ID
@@ -112,7 +115,7 @@ export class App {
     });
   }
 
-  private async processTweet(tweet: Tweet): Promise<void> {
+  private async processTweet(tweet: Tweet): Promise<Array<{ address: string; type: "EVM" | "SOL" }> | void> {
     try {
       const tweetData = tweet.content.itemContent?.tweet_results.result;
       if (!tweetData?.legacy || !tweetData.core?.user_results.result.legacy)
@@ -148,8 +151,55 @@ export class App {
         }`,
         new Date(tweetLegacy.created_at).toLocaleString()
       );
+
+      return addresses;
     } catch (error: unknown) {
       console.error("Error processing tweet:", error);
+    }
+  }
+
+  private async processTweetAndTrade(tweet: Tweet): Promise<void> {
+    try {
+      const addresses = await this.processTweet(tweet);
+      if (addresses) {
+        await this.trade(addresses);
+      }
+    } catch (error: unknown) {
+      console.error(error);
+    }
+  }
+
+  private async trade(addresses: Array<{ address: string; type: "EVM" | "SOL" }>): Promise<void> {
+    try {
+      for (const { address, type } of addresses) {
+            if (type === "SOL") {
+              const escapedAddress = this.escapeMarkdownV2(address);
+              console.log("Buying " + config.solana.amount_to_buy_sol + " SOL" + " at " + escapedAddress);
+              // 100% slippage
+              await buy(escapedAddress, config.solana.amount_to_buy_sol, 100);
+            }
+          }
+
+      for (const { address, type } of addresses) {
+        if (type === "SOL") {
+            const escapedAddress = this.escapeMarkdownV2(address);
+            // TODO: Add retry logic for getSPLTokenBalance?
+            const balance = await getSPLTokenBalance(
+              new PublicKey(escapedAddress),
+            );
+            console.log("Balance of " + escapedAddress + " is " + balance);
+
+            if (balance > 0) {
+              // Calcuate buying price based on the amount of SOL spent and token balance
+              const price = config.solana.amount_to_buy_sol / balance;
+              // Place limit sell order at 2x buying price
+              console.log("Creating sell order for " + escapedAddress + " at " + price * 2);
+              await createSellLimitOrder(escapedAddress, balance, price * 2);
+            }
+        }
+      }
+    } catch (error: unknown) {
+      console.error("Error submitting transcations:", error);
     }
   }
 

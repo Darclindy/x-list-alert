@@ -24,6 +24,11 @@ interface Config {
   twitter: {
     listId: string;
   };
+  solana: {
+    private_key: string;
+    main_endpoint: string;
+    amount_to_buy_sol: number;
+  };
 }
 
 export const config: Config = {
@@ -47,5 +52,10 @@ export const config: Config = {
   rapidApiHost: process.env.RAPID_API_HOST || "twitter-api47.p.rapidapi.com",
   twitter: {
     listId: process.env.TWITTER_LIST_ID || "1888126164751036784",
+  },
+  solana: {
+    private_key: process.env.PRIVATE_KEY || "",
+    main_endpoint: process.env.MAINNET_ENDPOINT || "",
+    amount_to_buy_sol: Number(process.env.AMOUNT_TO_BUY_SOL) || 0.001,
   },
 };
