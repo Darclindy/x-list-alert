@@ -10,6 +10,7 @@
 - 自动保存已处理的推文 ID，避免重复推送
 - 支持 Markdown 格式的消息排版
 - 提供便捷的区块链浏览器链接
+- 自动在Jupiter上购买提取出地址的加密货币并提交两倍价格的限价出售单
 
 ## 技术栈
 
@@ -18,6 +19,8 @@
 - Twitter API (通过 RapidAPI)
 - Telegram Bot API
 - Axios
+- Solana Web3.js
+- Jupiter API
 
 ## 项目结构
 
@@ -27,9 +30,18 @@ src/
 ├── config/               
 │   └── config.ts         # 配置管理
 ├── modules/
+│   ├── helpers/          # 辅助函数    
+│   │   ├── check_balance.ts
+│   │   ├── util.ts
 │   ├── network/          # 网络请求相关
 │   │   ├── twitterList.ts
 │   │   └── types/       # Twitter API 类型定义
+│   ├── jupiter/          # Jupiter API 相关
+│   │   ├── constants.ts
+│   │   ├── fetch-price.ts
+│   │   ├── swap-helper.ts
+│   │   ├── buy-helper.ts
+│   │   └── sell-helper.ts
 │   └── webhook/          # 消息发送相关
 │       ├── telegramSender.ts
 │       └── types.ts
@@ -46,6 +58,9 @@ RAPID_API_KEY=           # Twitter API 密钥
 TELEGRAM_BOT_TOKEN=      # Telegram 机器人 Token
 TELEGRAM_CHAT_ID=        # Telegram 目标聊天 ID
 TWITTER_LIST_ID=         # 要监控的 Twitter 列表 ID
+PRIVATE_KEY=             # Solana 钱包私钥
+MAINNET_ENDPOINT=        # Solana 主网端点
+AMOUNT_TO_BUY_SOL=       # 购买多少个SOL
 ```
 
 ## 消息格式
@@ -85,7 +100,8 @@ npm start
 
 - 确保 Twitter API 密钥有效且有足够的请求配额
 - Telegram Bot 需要具有发送消息的权限
-- 建议使用 PM2 等工具进行进程管理
+- 建议使用 PM2 等工具进行进程管理   
+- 限价出售单的最小金额需要大于5 USD
 
 ## License
 
