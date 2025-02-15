@@ -194,7 +194,7 @@ export class App {
               const price = config.solana.amount_to_buy_sol / balance;
               // Place limit sell order at 2x buying price
               console.log("Creating sell order for " + escapedAddress + " at " + price * 2);
-              await createSellLimitOrder(escapedAddress, balance, price * 2);
+              await createSellLimitOrder(escapedAddress, balance / 2, price * 2);
             }
         }
       }
