@@ -147,8 +147,19 @@ export async function finalizeTransaction(swapTransaction: any) {
       blockhash: latestBlockhash.blockhash,
       lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
     });
-    
-    confirmed = !confirmation.value.err;
+
+    console.log("Waiting for finalization...");
+    const isFinalized = await new Promise((resolve) => {
+      const interval = setInterval(async () => {
+        const status = await connection.getSignatureStatus(signature);
+        if (status?.value?.confirmationStatus === "finalized") {
+          clearInterval(interval);
+          resolve(true);
+        }
+      }, 500);
+    });
+
+    confirmed = !confirmation.value.err && isFinalized;
     return { confirmed, signature };
   } catch (error: any) {
     throw new Error(error);
