@@ -7,22 +7,27 @@ import { buy, createSellLimitOrder } from "./modules/jupiter";
 import { getSPLTokenBalance } from "./modules/helpers/check_balance";
 import fs from "fs";
 import path from "path";
+import { OpenAIAnalyzer } from "./modules/ai/openaiAnalyzer";
+import { SolscanService } from "./modules/network/solscanService";
 
 export class App {
   private twitterService: TwitterListService;
   private telegramSender: TelegramSender;
+  private solscanService: SolscanService;
   private listId: string;
   private processedTweetIds: Set<string>;
   private isProcessing: boolean;
   private readonly processedIdsFile: string;
   private readonly evmAddressRegex = /\b0x[a-fA-F0-9]{40}\b/;
   private readonly solAddressRegex = /\b[1-9A-HJ-NP-Za-km-z]{32,44}\b/;
+  private aiAnalyzer: OpenAIAnalyzer;
 
   constructor(listId: string) {
     this.twitterService = new TwitterListService();
     this.telegramSender = new TelegramSender({
       webhookUrl: config.webhook.telegram.botToken,
     });
+    this.solscanService = new SolscanService();
     this.listId = listId;
     this.processedIdsFile = path.join(
       __dirname,
@@ -30,6 +35,7 @@ export class App {
     );
     this.processedTweetIds = this.loadProcessedIds();
     this.isProcessing = false;
+    this.aiAnalyzer = new OpenAIAnalyzer();
   }
 
   private loadProcessedIds(): Set<string> {
@@ -115,7 +121,9 @@ export class App {
     });
   }
 
-  private async processTweet(tweet: Tweet): Promise<Array<{ address: string; type: "EVM" | "SOL" }> | void> {
+  private async processTweet(
+    tweet: Tweet
+  ): Promise<Array<{ address: string; type: "EVM" | "SOL" }> | void> {
     try {
       const tweetData = tweet.content.itemContent?.tweet_results.result;
       if (!tweetData?.legacy || !tweetData.core?.user_results.result.legacy)
@@ -124,12 +132,85 @@ export class App {
       const { legacy: tweetLegacy } = tweetData;
       const { legacy: userLegacy } = tweetData.core.user_results.result;
 
+      // 1. 首先检查合约地址
+      const addresses = this.extractAddresses(tweetLegacy.full_text);
+      let regexFoundCA = addresses.find((addr) => addr.type === "SOL")?.address;
+
+      // 2. 进行 AI 分析
+      try {
+        const analysis = await this.aiAnalyzer.analyzeTweet(
+          tweetLegacy.full_text
+        );
+
+        // 如果是代币发布且有代币符号
+        if (analysis.isTokenLaunch && analysis.tokenTicker) {
+          console.log(
+            `\n🔍 Verifying token ${analysis.tokenTicker} on Solscan...`
+          );
+
+          // 尝试从 Solscan 获取代币信息
+          const tokenInfo = await this.solscanService.searchToken(
+            analysis.tokenTicker.replace("$", "")
+          );
+
+          if (!tokenInfo) {
+            console.log(
+              `❌ Token ${analysis.tokenTicker} not found on Solscan`
+            );
+            return; // 如果找不到代币，不发送通知
+          }
+
+          // 比对合约地址
+          if (regexFoundCA && regexFoundCA !== tokenInfo.address) {
+            console.log(
+              `⚠️ Address mismatch: Regex found ${regexFoundCA}, Solscan found ${tokenInfo.address}`
+            );
+            return; // 如果地址不匹配，不发送通知
+          }
+
+          // 使用 Solscan 找到的地址
+          const verifiedCA = tokenInfo.address;
+
+          // 构建 AI 分析消息
+          const aiMessage = [
+            `🔍 *AI Analysis: New Token Launch Detected*`,
+            ``,
+            `🪙 Token: ${this.escapeMarkdownV2(analysis.tokenTicker)}`,
+            `📝 Contract: \`${this.escapeMarkdownV2(verifiedCA)}\``,
+            ``,
+            `📊 Token Info:`,
+            `• Name: ${this.escapeMarkdownV2(tokenInfo.name)}`,
+            `• Holders: ${this.escapeMarkdownV2(tokenInfo.holder.toString())}`,
+            `• Reputation: ${this.escapeMarkdownV2(
+              tokenInfo.reputation || "Unknown"
+            )}`,
+            ``,
+            `💡 Details: ${this.escapeMarkdownV2(
+              analysis.launchHint || "No details"
+            )}`,
+            `🎯 Confidence: ${analysis.confidence || "MEDIUM"}`,
+            ``,
+            `Original Tweet:`,
+            this.escapeMarkdownV2(tweetLegacy.full_text),
+          ].join("\n");
+
+          // 发送 AI 分析结果
+          await this.telegramSender.sendTweetNotification(
+            aiMessage,
+            `https://twitter.com/${userLegacy.screen_name}/status/${tweetLegacy.id_str}`,
+            `🤖 AI Token Launch Alert - ${userLegacy.name} (@${
+              userLegacy.screen_name
+            })${userLegacy.verified ? " ✓" : ""}`,
+            new Date(tweetLegacy.created_at).toLocaleString()
+          );
+        }
+      } catch (error) {
+        console.error("AI analysis or Solscan verification failed:", error);
+      }
+
       // 记录已处理的推文
       this.processedTweetIds.add(tweetLegacy.id_str);
       this.saveProcessedIds();
-
-      // 提取地址
-      const addresses = this.extractAddresses(tweetLegacy.full_text);
       if (addresses.length === 0) {
         return;
       }
@@ -169,33 +250,43 @@ export class App {
     }
   }
 
-  private async trade(addresses: Array<{ address: string; type: "EVM" | "SOL" }>): Promise<void> {
+  private async trade(
+    addresses: Array<{ address: string; type: "EVM" | "SOL" }>
+  ): Promise<void> {
     try {
       for (const { address, type } of addresses) {
-            if (type === "SOL") {
-              const escapedAddress = this.escapeMarkdownV2(address);
-              console.log("Buying " + config.solana.amount_to_buy_sol + " SOL" + " at " + escapedAddress);
-              // 100% slippage
-              await buy(escapedAddress, config.solana.amount_to_buy_sol, 100);
-            }
-          }
+        if (type === "SOL") {
+          const escapedAddress = this.escapeMarkdownV2(address);
+          console.log(
+            "Buying " +
+              config.solana.amount_to_buy_sol +
+              " SOL" +
+              " at " +
+              escapedAddress
+          );
+          // 100% slippage
+          await buy(escapedAddress, config.solana.amount_to_buy_sol, 100);
+        }
+      }
 
       for (const { address, type } of addresses) {
         if (type === "SOL") {
-            const escapedAddress = this.escapeMarkdownV2(address);
-            // TODO: Add retry logic for getSPLTokenBalance?
-            const balance = await getSPLTokenBalance(
-              new PublicKey(escapedAddress),
-            );
-            console.log("Balance of " + escapedAddress + " is " + balance);
+          const escapedAddress = this.escapeMarkdownV2(address);
+          // TODO: Add retry logic for getSPLTokenBalance?
+          const balance = await getSPLTokenBalance(
+            new PublicKey(escapedAddress)
+          );
+          console.log("Balance of " + escapedAddress + " is " + balance);
 
-            if (balance > 0) {
-              // Calcuate buying price based on the amount of SOL spent and token balance
-              const price = config.solana.amount_to_buy_sol / balance;
-              // Place limit sell order at 2x buying price
-              console.log("Creating sell order for " + escapedAddress + " at " + price * 2);
-              await createSellLimitOrder(escapedAddress, balance / 2, price * 2);
-            }
+          if (balance > 0) {
+            // Calcuate buying price based on the amount of SOL spent and token balance
+            const price = config.solana.amount_to_buy_sol / balance;
+            // Place limit sell order at 2x buying price
+            console.log(
+              "Creating sell order for " + escapedAddress + " at " + price * 2
+            );
+            await createSellLimitOrder(escapedAddress, balance / 2, price * 2);
+          }
         }
       }
     } catch (error: unknown) {
@@ -269,7 +360,6 @@ export class App {
     // 转义剩余的特殊字符
     highlightedText = this.escapeMarkdownV2(highlightedText);
 
-    // 组合最终消息
     return [
       addressSection,
       this.escapeMarkdownV2("━".repeat(20)),
